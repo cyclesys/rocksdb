@@ -98,3 +98,6 @@ cmake-build-*
 third-party/folly/
 .cache
 *.sublime-*
+
+**/zig-cache/**
+**/zig-out/**
