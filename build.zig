@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const root_dir = comptime std.fs.path.dirname(@src().file) orelse ".";
+    const root_dir = comptime rootDir();
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -55,8 +55,8 @@ pub fn build(b: *std.Build) void {
 const base_flags: []const []const u8 = &[_][]const u8{
     "-std=c++17",
     "-O3",
-    "-I.",
-    "-I./include",
+    "-I" ++ rootDir(),
+    "-I" ++ rootDir() ++ "/include",
     "-W",
     "-Wextra",
     "-Wall",
@@ -479,11 +479,17 @@ const arm64_sources = absolutePaths([_][]const u8{
 
 fn absolutePaths(comptime paths: anytype) [paths.len][]const u8 {
     comptime {
-        const root_dir = std.fs.path.dirname(@src().file) orelse ".";
+        const root_dir = rootDir();
         var out_paths: [paths.len][]const u8 = undefined;
         for (paths, 0..) |path, i| {
             out_paths[i] = root_dir ++ "/" ++ path;
         }
         return out_paths;
+    }
+}
+
+fn rootDir() []const u8 {
+    comptime {
+        return std.fs.path.dirname(@src().file) orelse ".";
     }
 }
