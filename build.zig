@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) void {
         },
     }
 
-    lib.installHeadersDirectory(root_dir ++ "/include", "rocksdb");
+    lib.installHeadersDirectory(root_dir ++ "/include/rocksdb", "rocksdb");
 
     b.installArtifact(lib);
 }
