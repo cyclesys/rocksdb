@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const root_dir = comptime rootDir();
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -32,8 +32,18 @@ pub fn build(b: *std.Build) void {
         .flags = flags,
     });
 
+    const build_version_step = try genBuildVersionFile(b);
+    const build_version_file = build_version_step.files.items[0];
+    const build_version_file_path = build_version_file.getPath();
+    lib.addCSourceFile(.{
+        .file = build_version_file_path,
+        .flags = flags,
+    });
+
     switch (lib.target_info.target.os.tag) {
         .windows => {
+            lib.linkSystemLibrary2("shlwapi", .{ .needed = true });
+            lib.linkSystemLibrary2("rpcrt4", .{ .needed = true });
             lib.addCSourceFiles(.{
                 .files = &windows_sources,
                 .flags = flags,
@@ -48,8 +58,95 @@ pub fn build(b: *std.Build) void {
     }
 
     lib.installHeadersDirectory(root_dir ++ "/include/rocksdb", "rocksdb");
-
     b.installArtifact(lib);
+}
+
+fn genBuildVersionFile(b: *std.Build) !*std.Build.Step.WriteFile {
+    const root_dir = comptime rootDir();
+    const file = try std.fs.openFileAbsolute(root_dir ++ "/util/build_version.cc.in", .{});
+    defer file.close();
+
+    const src = try file.readToEndAlloc(b.allocator, 1_000_000);
+    defer b.allocator.free(src);
+
+    const Placeholders = enum {
+        git_sha,
+        git_tag,
+        git_mod,
+        git_date,
+        build_date,
+        plugin_builtins,
+        plugin_externs,
+    };
+    const placeholders = std.ComptimeStringMap(Placeholders, .{
+        .{ "@GIT_SHA@", Placeholders.git_sha },
+        .{ "@GIT_TAG@", Placeholders.git_tag },
+        .{ "@GIT_MOD@", Placeholders.git_mod },
+        .{ "@GIT_DATE@", Placeholders.git_date },
+        .{ "@BUILD_DATE@", Placeholders.build_date },
+        .{ "@ROCKSDB_PLUGIN_BUILTINS@", Placeholders.plugin_builtins },
+        .{ "@ROCKSDB_PLUGIN_EXTERNS@", Placeholders.plugin_externs },
+    });
+
+    var dest = std.ArrayList(u8).init(b.allocator);
+    defer dest.deinit();
+
+    var start: ?usize = null;
+    for (src, 0..) |byte, i| {
+        if (byte == '@') {
+            if (start == null) {
+                start = i;
+                continue;
+            }
+
+            const end = i + 1;
+            const bytes = src[start.?..end];
+            start = null;
+
+            const tag = placeholders.get(bytes) orelse {
+                try dest.appendSlice(bytes);
+                continue;
+            };
+            switch (tag) {
+                .git_sha => {
+                    const git_sha = b.exec(&.{ "git", "rev-parse", "HEAD" });
+                    defer b.allocator.free(git_sha);
+
+                    // truncate the newline char
+                    const sha_bytes = git_sha[0 .. git_sha.len - 1];
+                    try dest.appendSlice(sha_bytes);
+                },
+                .git_tag => {
+                    // this should be kept up-to-date with the latest version tag
+                    const git_tag = "v8.8.1";
+                    try dest.appendSlice(git_tag);
+                },
+                .git_mod => {
+                    // this is always set to 0 so that the git_date is used by build_version.cc
+                    const git_mod = "0";
+                    try dest.appendSlice(git_mod);
+                },
+                .git_date => {
+                    const git_date = b.exec(&.{ "git", "log", "-1", "--date=format:\"%Y-%m-%d %T\"", "--format=\"%ad\"" });
+                    defer b.allocator.free(git_date);
+
+                    // truncate the quote and newline chars
+                    const date_bytes = git_date[2 .. git_date.len - 3];
+                    try dest.appendSlice(date_bytes);
+                },
+                .build_date, .plugin_builtins, .plugin_externs => {
+                    // These are left-out
+                },
+            }
+        } else if (start == null) {
+            try dest.append(byte);
+        }
+    }
+    if (start) |s| {
+        try dest.appendSlice(src[s..]);
+    }
+
+    return b.addWriteFile("build_version.cc", dest.items);
 }
 
 const base_flags: []const []const u8 = &[_][]const u8{
@@ -83,6 +180,7 @@ const posix_flags: []const []const u8 = &[_][]const u8{
 
 const windows_flags: []const []const u8 = &[_][]const u8{
     "-Wno-format",
+    "-D_POSIX_C_SOURCE=1",
     "-DWIN32",
     "-DOS_WIN",
     "-D_MBCS",
